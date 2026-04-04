@@ -28,7 +28,8 @@ function App() {
     try {
       const permission = await Notification.requestPermission();
       if (permission === "granted") {
-        const registration = await navigator.serviceWorker.ready;
+        const registration = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+        console.log("✅ Service Worker registered with scope:", registration.scope);
         const currentToken = await getToken(messaging, { 
           vapidKey: VAPID_KEY,
           serviceWorkerRegistration: registration 

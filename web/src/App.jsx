@@ -1,38 +1,106 @@
 import { useEffect, useState } from "react";
 import { auth, db, messaging } from "./firebase";
 import { onAuthStateChanged, signOut } from "firebase/auth";
-import { getToken, onMessage } from "firebase/messaging";
-import { doc, setDoc, onSnapshot, collection, query, orderBy, limit } from "firebase/firestore";
-import { LayoutDashboard, FileUp, List, ShieldCheck, LogOut, Bell } from "lucide-react"; // Added Bell
-
-// Components
+import { getToken } from "firebase/messaging";
+import { collection, doc, limit, onSnapshot, orderBy, query, setDoc, where } from "firebase/firestore";
+import {
+  Bell,
+  Box,
+  FileUp,
+  LayoutDashboard,
+  List,
+  LogOut,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
+import OverviewPage from "./pages/OverviewPage";
+import NotificationsPage from "./pages/NotificationsPage";
+import InventoryPage from "./pages/InventoryPage";
+import ImportPage from "./pages/ImportPage";
+import AdminPage from "./pages/AdminPage";
 import Auth from "./components/Auth";
-import AssetList from "./components/AssetList";
-import FileUpload from "./components/FileUpload";
-import AdminTools from "./components/AdminTools";
 
 const VAPID_KEY = "BNWQAD59tgRERsCJOcz9YXmc9ecOIh0DZjitsTB8N8VX5p-kGmkODxrRJUVbwfxgkp9QXCcUBxZlGDHcrcRGklc";
 
-function App() {
+const NAV_ITEMS = [
+  { id: "overview", label: "Overview", icon: LayoutDashboard, roles: ["admin", "worker", "viewer"] },
+  { id: "notifications", label: "Updates", icon: Bell, roles: ["admin", "worker", "viewer"] },
+  { id: "import", label: "Import", icon: FileUp, roles: ["admin", "worker"] },
+  { id: "inventory", label: "Assets", icon: List, roles: ["admin", "worker", "viewer"] },
+  { id: "admin", label: "Admin", icon: ShieldCheck, roles: ["admin"] },
+];
+
+const PAGE_META = {
+  overview: {
+    title: "Operations Overview",
+    description: "A calmer snapshot of inventory, activity, and what needs attention next.",
+  },
+  notifications: {
+    title: "Notifications",
+    description: "Recent broadcasts and operational updates for your team.",
+  },
+  import: {
+    title: "Bulk Import",
+    description: "Bring in CSV or spreadsheet data with a cleaner upload workflow.",
+  },
+  inventory: {
+    title: "Asset Inventory",
+    description: "Browse, review, and monitor imported assets across categories and statuses.",
+  },
+  admin: {
+    title: "Admin Broadcasts",
+    description: "Send clear operational updates to workers and viewers in real time.",
+  },
+};
+
+function normalizeAsset(doc) {
+  const data = doc.data();
+  const name = data.Asset_Name || data.name || data.assetName || "Unnamed Asset";
+  const category = data.Category || data.category || "Uncategorized";
+  const status = String(data.Status || data.status || "Unknown").trim();
+  const rawValue = data.Value ?? data.value ?? data.price ?? 0;
+  const price = Number(rawValue) || 0;
+
+  return {
+    id: doc.id,
+    name,
+    category,
+    status,
+    price,
+    purchaseDate: data.Purchase_Date || data.purchaseDate || null,
+  };
+}
+
+export default function App() {
   const [user, setUser] = useState(null);
   const [role, setRole] = useState(null);
   const [activeTab, setActiveTab] = useState("overview");
   const [isAuthChecking, setIsAuthChecking] = useState(true);
-
-  // --- New States for Notification History ---
   const [announcements, setAnnouncements] = useState([]);
+  const [assets, setAssets] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // --- 1. Notification Setup ---
+  const availableNavItems = NAV_ITEMS.filter((item) => item.roles.includes(role || "viewer"));
+  const currentMeta = PAGE_META[activeTab] || PAGE_META.overview;
+
+  const handleTabChange = (nextTab) => {
+    setActiveTab(nextTab);
+    if (nextTab === "notifications") {
+      setUnreadCount(0);
+    }
+  };
+
   const setupNotifications = async (currentUser) => {
     try {
       const permission = await Notification.requestPermission();
       if (permission === "granted") {
         const registration = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
-        console.log("✅ Service Worker registered with scope:", registration.scope);
-        const currentToken = await getToken(messaging, { 
+        const currentToken = await getToken(messaging, {
           vapidKey: VAPID_KEY,
-          serviceWorkerRegistration: registration 
+          serviceWorkerRegistration: registration,
         });
 
         if (currentToken) {
@@ -41,166 +109,256 @@ function App() {
         }
       }
     } catch (err) {
-      console.error("❌ Notification Setup Error:", err);
+      console.error("Notification setup error:", err);
     }
   };
 
-  // --- 2. Real-time Listeners (Auth, Role, Announcements) ---
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
-      
+
       if (currentUser) {
         const userRef = doc(db, "users", currentUser.uid);
-        
-        // Listen for Role
         const unsubscribeRole = onSnapshot(userRef, (docSnap) => {
           setRole(docSnap.exists() ? docSnap.data().role : "viewer");
           setIsAuthChecking(false);
         });
 
-        // --- NEW: Listen for latest 10 Announcements ---
-        const annRef = collection(db, "announcements");
-        const q = query(annRef, orderBy("createdAt", "desc"), limit(10));
-        
-        const unsubscribeAnnouncements = onSnapshot(q, (snapshot) => {
-          const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-          
-          // Only increment unread count if user isn't currently looking at notifications
-          setAnnouncements((prev) => {
-            if (prev.length > 0 && activeTab !== "notifications") {
-              setUnreadCount(c => c + 1);
-            }
-            return docs;
-          });
-        });
-
         setupNotifications(currentUser);
-
-        // Foreground messaging
-        const unsubscribeMsg = onMessage(messaging, (payload) => {
-          new Notification(payload.notification.title, {
-            body: payload.notification.body,
-          });
-        });
-
-        return () => {
-          unsubscribeRole();
-          unsubscribeAnnouncements();
-          unsubscribeMsg();
-        };
-      } else {
-        setRole(null);
-        setIsAuthChecking(false);
+        return () => unsubscribeRole();
       }
+
+      setAnnouncements([]);
+      setAssets([]);
+      setUnreadCount(0);
+      setRole(null);
+      setIsAuthChecking(false);
     });
 
     return () => unsubscribeAuth();
-  }, [activeTab]); // Listen for activeTab changes to handle unread reset
+  }, []);
 
-  // Reset unread count when clicking the tab
   useEffect(() => {
-    if (activeTab === "notifications") setUnreadCount(0);
-  }, [activeTab]);
+    if (!user) return;
 
-  if (isAuthChecking) return <div style={centerStyle}><h2>Loading AssetFlow...</h2></div>;
-  if (!user) return <Auth />;
+    const annRef = collection(db, "announcements");
+    const q = query(annRef, orderBy("createdAt", "desc"), limit(10));
+
+    const unsubscribeAnnouncements = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map((announcement) => ({ id: announcement.id, ...announcement.data() }));
+      setAnnouncements((prev) => {
+        if (prev.length > 0 && activeTab !== "notifications" && docs.length > prev.length) {
+          setUnreadCount((count) => count + (docs.length - prev.length));
+        }
+        return docs;
+      });
+    });
+
+    return () => unsubscribeAnnouncements();
+  }, [user, activeTab]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const assetsRef = collection(db, "assets");
+    const q = query(assetsRef, where("userId", "==", user.uid));
+
+    const unsubscribeAssets = onSnapshot(q, (snapshot) => {
+      setAssets(snapshot.docs.map(normalizeAsset));
+    });
+
+    return () => unsubscribeAssets();
+  }, [user]);
+
+  const renderContent = () => {
+    switch (activeTab) {
+      case "overview":
+        return (
+          <OverviewPage
+            announcements={announcements}
+            assets={assets}
+            role={role}
+            setActiveTab={handleTabChange}
+            user={user}
+          />
+        );
+      case "notifications":
+        return <NotificationsPage announcements={announcements} />;
+      case "inventory":
+        return <InventoryPage assets={assets} />;
+      case "import":
+        return <ImportPage />;
+      case "admin":
+        return <AdminPage />;
+      default:
+        return (
+          <OverviewPage
+            announcements={announcements}
+            assets={assets}
+            role={role}
+            setActiveTab={handleTabChange}
+            user={user}
+          />
+        );
+    }
+  };
+
+  if (isAuthChecking) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top_left,_#ffffff,_#dbeafe_42%,_#c7d2fe_100%)] px-6 text-slate-700">
+        <div className="rounded-[1.75rem] border border-white/60 bg-white/65 px-8 py-6 text-base font-medium shadow-[0_24px_60px_rgba(15,23,42,0.12)] backdrop-blur-xl">
+          Loading AssetFlow...
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Auth />;
+  }
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", fontFamily: "sans-serif" }}>
-      {/* Sidebar */}
-      <nav style={sidebarStyle}>
-        <div style={{ flex: 1 }}>
-          <h2 style={{ marginBottom: "30px" }}>AssetFlow</h2>
-          <ul style={{ listStyle: "none", padding: 0 }}>
-            <li onClick={() => setActiveTab("overview")} style={activeTab === "overview" ? activeNavItemStyle : navItemStyle}>
-              <LayoutDashboard size={20} /> Overview
-            </li>
+    <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top_left,_#ffffff,_#dbeafe_36%,_#c7d2fe_66%,_#e0e7ff_100%)] text-slate-900">
+      <div className="pointer-events-none absolute left-[-10%] top-[-5%] h-64 w-64 rounded-full bg-cyan-200/35 blur-3xl sm:h-80 sm:w-80" />
+      <div className="pointer-events-none absolute bottom-[-10%] right-[-5%] h-72 w-72 rounded-full bg-indigo-200/35 blur-3xl sm:h-96 sm:w-96" />
 
-            {/* --- NEW: Notification Sidebar Button --- */}
-            <li onClick={() => setActiveTab("notifications")} style={activeTab === "notifications" ? activeNavItemStyle : navItemStyle}>
-              <div style={{ position: "relative", display: "flex", alignItems: "center", gap: "10px" }}>
-                <Bell size={20} /> Notifications
-                {unreadCount > 0 && <span style={badgeStyle}>{unreadCount}</span>}
+      <div className="relative z-10 flex min-h-screen flex-col lg:flex-row">
+        <aside className="border-b border-white/35 bg-slate-950/82 px-3 py-3.5 text-white shadow-[0_14px_30px_rgba(15,23,42,0.16)] backdrop-blur-2xl sm:px-4 sm:py-4 lg:sticky lg:top-0 lg:flex lg:h-screen lg:w-[248px] lg:flex-col lg:border-b-0 lg:border-r lg:border-white/10 lg:px-4 lg:py-5">
+          <div className="flex items-center justify-between gap-3 lg:items-start">
+            <div className="flex items-center gap-3">
+      
+              <div className="flex justify-center items-center">
+                <h2 className="mt-0.5 text-lg font-semibold tracking-tight !text-white">AssetFlow</h2>
+              </div>  
+              
+            </div>
+       
+          </div>
+
+       
+          <div className="flex w-full flex-col items-center justify-center gap-2">
+              <div className="grid gap-2 sm:flex">
+               <HeaderChip  value={role || "viewer"} />
+                </div>
               </div>
-            </li>
 
-            {(role === "admin" || role === "worker") && (
-              <li onClick={() => setActiveTab("import")} style={activeTab === "import" ? activeNavItemStyle : navItemStyle}>
-                <FileUp size={20} /> Bulk Import
-              </li>
-            )}
-            <li onClick={() => setActiveTab("inventory")} style={activeTab === "inventory" ? activeNavItemStyle : navItemStyle}>
-              <List size={20} /> Asset List
-            </li>
-            {role === "admin" && (
-              <li onClick={() => setActiveTab("admin")} style={activeTab === "admin" ? activeNavItemStyle : navItemStyle}>
-                <ShieldCheck size={20} /> Admin Panel
-              </li>
-            )}
-          </ul>
-        </div>
+          <div className="mt-4 rounded-[1.4rem] border border-white/10 bg-white/6 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] lg:mt-5">
+            
+            
+            <div className="flex items-start justify-between gap-4">
+  
 
-        <div style={{ borderTop: "1px solid #334155", paddingTop: "20px" }}>
-          <p style={{ fontSize: "12px", color: "#94a3b8" }}>
-            Role: <span style={{ fontWeight: "bold" }}>{role?.toUpperCase()}</span>
-          </p>
-          <button onClick={() => signOut(auth)} style={logoutBtnStyle}>
-            <LogOut size={18} /> Logout
-          </button>
-        </div>
-      </nav>
-
-      {/* Main Content */}
-      <main style={{ flex: 1, padding: "40px", backgroundColor: "#f8fafc" }}>
-        <section style={contentCardStyle}>
-          
-          {/* --- NEW: Notification UI --- */}
-          {activeTab === "notifications" && (
-            <div>
-              <h2 style={{ marginBottom: "20px", borderBottom: "2px solid #f1f5f9", paddingBottom: "10px" }}>Recent Announcements</h2>
-              {announcements.length === 0 ? (
-                <p style={{ color: "#64748b" }}>No announcements yet.</p>
-              ) : (
-                announcements.map((ann) => (
-                  <div key={ann.id} style={notificationCardStyle}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "5px" }}>
-                      <strong style={{ color: "#1e293b" }}>Admin Broadcast</strong>
-                      <span style={{ fontSize: "12px", color: "#94a3b8" }}>
-                        {ann.createdAt?.toDate ? ann.createdAt.toDate().toLocaleString() : "Just now"}
-                      </span>
-                    </div>
-                    <p style={{ margin: 0, color: "#475569", lineHeight: "1.5" }}>{ann.content}</p>
-                  </div>
-                ))
-              )}
+              <div>
+                <p className="text-xs uppercase tracking-[0.26em] text-white/45">Signed In As</p>
+                <p className="mt-2 max-w-[15rem] truncate text-xs font-small text-white/90">{user.email}</p>
+              </div>
+            
             </div>
-          )}
+            
+          </div>
 
-          {activeTab === "overview" && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
-              <div onClick={() => setActiveTab("inventory")} style={cardStyle}><h3>Inventory</h3><p>View Assets</p></div>
-              <div onClick={() => setActiveTab("notifications")} style={cardStyle}><h3>Updates</h3><p>Check Announcements</p></div>
+          <nav className="mt-4 flex flex-wrap gap-2 lg:flex-col lg:gap-2">
+            {availableNavItems.map((item) => (
+              <SidebarLink
+                key={item.id}
+                badge={item.id === "notifications" ? unreadCount : 0}
+                icon={<item.icon className="h-[18px] w-[18px]" />}
+                label={item.label}
+                active={activeTab === item.id}
+                onClick={() => handleTabChange(item.id)}
+              />
+            ))}
+          </nav>
+
+          <div className="mt-4 rounded-[1.4rem] border border-white/10 bg-gradient-to-br from-cyan-300/12 to-indigo-300/10 p-4 text-white/90 lg:mt-auto">
+            <div className="flex items-center gap-2 text-cyan-100/80">
+              <Sparkles className="h-3.5 w-3.5" />
+              <p className="text-xs uppercase tracking-[0.26em]">Operational Focus</p>
             </div>
-          )}
-          {activeTab === "import" && <FileUpload />}
-          {activeTab === "inventory" && <AssetList />}
-          {activeTab === "admin" && <AdminTools />}
-        </section>
-      </main>
+            <p className="mt-2.5 text-xs leading-5 text-white/78 sm:text-sm">
+              Keep imports, asset visibility, and team updates in one calm workspace.
+            </p>
+
+            <Button
+              variant="ghost"
+              className="mt-4 h-10 w-full justify-center rounded-[1rem] border border-white/12 bg-white/6 text-sm text-white hover:bg-red-400/12 hover:text-red-100"
+              onClick={() => signOut(auth)}
+            >
+              <LogOut className="mr-2 h-4 w-4" />
+              Logout
+            </Button>
+          </div>
+        </aside>
+
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-3 sm:p-4 lg:h-screen lg:p-5 xl:p-6">
+          <header className="rounded-[1.5rem] border border-white/45 bg-white/52 px-4 pb-4 pt-1 shadow-[0_18px_40px_rgba(15,23,42,0.07)] backdrop-blur-xl sm:px-5 sm:py-4 lg:px-6">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+            {/* 2. Changed mt-2 to mt-0 */}
+              <h1 className="mt-0 text-2xl font-semibold tracking-tight text-slate-950 sm:text-[30px]">
+                {currentMeta.title}
+              </h1>
+              <p className="mt-2 max-w-xl text-sm leading-6 text-slate-500">
+                {currentMeta.description}
+              </p>
+              </div>
+
+              
+            </div>
+          </header>
+
+          <div className="mt-4 min-h-0 flex-1 overflow-y-auto">
+            {renderContent()}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
 
-// --- Added Styles ---
-const sidebarStyle = { width: "260px", background: "#1e293b", color: "white", padding: "25px", display: "flex", flexDirection: "column" };
-const navItemStyle = { display: "flex", alignItems: "center", gap: "10px", padding: "12px", cursor: "pointer", borderRadius: "8px", marginBottom: "5px", color: "#cbd5e1" };
-const activeNavItemStyle = { ...navItemStyle, background: "#334155", color: "white" };
-const badgeStyle = { background: "#ef4444", color: "white", borderRadius: "50%", padding: "2px 6px", fontSize: "10px", position: "absolute", top: "-5px", right: "-12px", fontWeight: "bold", border: "2px solid #1e293b" };
-const notificationCardStyle = { padding: "15px", borderRadius: "10px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", marginBottom: "15px" };
-const logoutBtnStyle = { display: "flex", alignItems: "center", gap: "10px", background: "none", border: "1px solid #ef4444", color: "#ef4444", padding: "10px", cursor: "pointer", borderRadius: "8px", width: "100%", marginTop: "10px" };
-const contentCardStyle = { background: "white", padding: "30px", borderRadius: "12px", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)", minHeight: "80vh" };
-const cardStyle = { padding: "30px", border: "1px solid #e2e8f0", borderRadius: "12px", textAlign: "center", cursor: "pointer" };
-const centerStyle = { display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" };
+function HeaderChip({ label, value }) {
+  return (
+    <div className="rounded-[1.1rem] border border-white/50 bg-white/55 px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)] backdrop-blur">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">{label}</p>
+      <p className="mt-1 text-xs font-semibold capitalize text-slate-900 sm:text-sm">{value}</p>
+    </div>
+  );
+}
 
-export default App;
+function StatPill({ label, value }) {
+  return (
+    <div className="rounded-[1rem] border border-white/10 bg-white/6 px-3 py-2.5">
+      <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">{label}</p>
+      <p className="mt-1 text-base font-semibold text-white">{value}</p>
+    </div>
+  );
+}
+
+function SidebarLink({ icon, label, active, onClick, badge }) {
+  return (
+    <button
+      className={cn(
+        "group relative flex min-w-[8.25rem] items-center gap-2.5 rounded-[1rem] border px-3 py-2.5 text-left text-xs font-medium transition-all sm:text-sm lg:min-w-0",
+        active
+          ? "border-cyan-200/25 bg-white text-slate-950 shadow-[0_14px_30px_rgba(255,255,255,0.1)]"
+          : "border-white/8 bg-white/6 text-white/74 hover:border-white/16 hover:bg-white/10 hover:text-white"
+      )}
+      onClick={onClick}
+    >
+      <span
+        className={cn(
+          "flex h-8 w-8 items-center justify-center rounded-[0.9rem] transition-colors",
+          active ? "bg-slate-100 text-blue-700" : "bg-white/7 text-white/70 group-hover:bg-white/12"
+        )}
+      >
+        {icon}
+      </span>
+      <span className="flex-1">{label}</span>
+      {badge > 0 && (
+        <Badge className="border-none bg-rose-500 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
+          {badge}
+        </Badge>
+      )}
+    </button>
+  );
+}

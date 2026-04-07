@@ -32,9 +32,28 @@ const STATUS_UI = {
   },
 };
 
+function getImportErrorMessage(error) {
+  if (axios.isAxiosError(error)) {
+    if (error.response?.data?.detail) {
+      return error.response.data.detail;
+    }
+
+    if (error.request) {
+      return "Could not reach the upload server at http://localhost:8000. Make sure the backend is running, then try again.";
+    }
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "Import failed.";
+}
+
 export default function ImportPage() {
   const [file, setFile] = useState(null);
   const [status, setStatus] = useState("idle");
+  const [statusDetail, setStatusDetail] = useState("");
 
   const handleUpload = async () => {
     if (!file) return;
@@ -46,16 +65,35 @@ export default function ImportPage() {
     }
 
     setStatus("uploading");
+    setStatusDetail("");
     const formData = new FormData();
     formData.append("file", file);
     formData.append("user_id", user.uid);
 
     try {
-      await axios.post("http://localhost:8000/upload", formData);
+      const response = await axios.post("http://localhost:8000/upload", formData);
+      const data = response.data ?? {};
+
+      if (!Object.prototype.hasOwnProperty.call(data, "importedCount")) {
+        throw new Error("Upload API returned an outdated response. Restart the backend server, then try the import again.");
+      }
+
+      const importedCount = Number(data.importedCount);
+
+      if (!Number.isFinite(importedCount)) {
+        throw new Error("Upload API returned an invalid import count. Restart the backend server and try again.");
+      }
+
+      if (importedCount <= 0) {
+        throw new Error("The file was accepted, but zero rows were imported. Check that the spreadsheet has a header row and at least one data row.");
+      }
+
       setStatus("success");
+      setStatusDetail(`${importedCount} asset${importedCount === 1 ? "" : "s"} imported to Firestore.`);
     } catch (error) {
       console.error(error);
       setStatus("error");
+      setStatusDetail(getImportErrorMessage(error));
     }
   };
 
@@ -118,7 +156,7 @@ export default function ImportPage() {
                 <h3 className="mt-1 text-base font-semibold">{statusConfig.title}</h3>
               </div>
             </div>
-            <p className="mt-3 text-sm leading-6">{statusConfig.message}</p>
+            <p className="mt-3 text-sm leading-6">{statusDetail || statusConfig.message}</p>
           </div>
 
           <div className="mt-4 space-y-2.5">

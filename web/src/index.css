@@ -132,7 +132,7 @@ body {
   text-align: center;
   display: flex;
   flex-direction: column;
-  overflow: hidden; /* Prevents the 'double scrollbar' glitch */
+  overflow-x: hidden;
 }
 
 h1,

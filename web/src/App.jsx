@@ -81,6 +81,7 @@ export default function App() {
   const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [announcements, setAnnouncements] = useState([]);
   const [assets, setAssets] = useState([]);
+  const [assetError, setAssetError] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
 
   const availableNavItems = NAV_ITEMS.filter((item) => item.roles.includes(role || "viewer"));
@@ -130,6 +131,7 @@ export default function App() {
 
       setAnnouncements([]);
       setAssets([]);
+      setAssetError("");
       setUnreadCount(0);
       setRole(null);
       setIsAuthChecking(false);
@@ -158,17 +160,32 @@ export default function App() {
   }, [user, activeTab]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || !role) return;
 
     const assetsRef = collection(db, "assets");
-    const q = query(assetsRef, where("userId", "==", user.uid));
+    const assetSource = role === "admin" ? assetsRef : query(assetsRef, where("userId", "==", user.uid));
 
-    const unsubscribeAssets = onSnapshot(q, (snapshot) => {
-      setAssets(snapshot.docs.map(normalizeAsset));
-    });
+    setAssetError("");
+
+    const unsubscribeAssets = onSnapshot(
+      assetSource,
+      (snapshot) => {
+        setAssetError("");
+        setAssets(snapshot.docs.map(normalizeAsset));
+      },
+      (error) => {
+        console.error("Asset subscription error:", error);
+        setAssets([]);
+        setAssetError(
+          error.code === "permission-denied"
+            ? "Firestore blocked the asset read. Check your Firestore rules for the assets collection."
+            : "Asset inventory could not be loaded from Firestore."
+        );
+      }
+    );
 
     return () => unsubscribeAssets();
-  }, [user]);
+  }, [user, role]);
 
   const renderContent = () => {
     switch (activeTab) {
@@ -185,7 +202,7 @@ export default function App() {
       case "notifications":
         return <NotificationsPage announcements={announcements} />;
       case "inventory":
-        return <InventoryPage assets={assets} />;
+        return <InventoryPage assets={assets} assetError={assetError} role={role} />;
       case "import":
         return <ImportPage />;
       case "admin":
@@ -218,12 +235,34 @@ export default function App() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top_left,_#ffffff,_#dbeafe_36%,_#c7d2fe_66%,_#e0e7ff_100%)] text-slate-900">
+    <div className="relative min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_top_left,_#ffffff,_#dbeafe_36%,_#c7d2fe_66%,_#e0e7ff_100%)] text-slate-900 lg:h-screen lg:overflow-hidden">
       <div className="pointer-events-none absolute left-[-10%] top-[-5%] h-64 w-64 rounded-full bg-cyan-200/35 blur-3xl sm:h-80 sm:w-80" />
       <div className="pointer-events-none absolute bottom-[-10%] right-[-5%] h-72 w-72 rounded-full bg-indigo-200/35 blur-3xl sm:h-96 sm:w-96" />
 
-      <div className="relative z-10 flex min-h-screen flex-col lg:flex-row">
-        <aside className="border-b border-white/35 bg-slate-950/82 px-3 py-3.5 text-white shadow-[0_14px_30px_rgba(15,23,42,0.16)] backdrop-blur-2xl sm:px-4 sm:py-4 lg:sticky lg:top-0 lg:flex lg:h-screen lg:w-[248px] lg:flex-col lg:border-b-0 lg:border-r lg:border-white/10 lg:px-4 lg:py-5">
+      <div className="sticky top-0 z-40 border-b border-white/35 bg-slate-950/88 px-3 py-3 text-white shadow-[0_14px_30px_rgba(15,23,42,0.16)] backdrop-blur-2xl lg:hidden">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold tracking-tight !text-white">AssetFlow</h2>
+          <div className="flex items-center gap-2">
+            <HeaderChip value={role || "viewer"} />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-10 w-10 rounded-full border border-white/12 bg-white/6 text-white hover:bg-red-400/12 hover:text-red-100"
+              onClick={() => signOut(auth)}
+            >
+              <LogOut className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-[1.2rem] border border-white/10 bg-white/6 px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+          <p className="text-xs uppercase tracking-[0.26em] text-white/45">Signed In As</p>
+          <p className="mt-2 truncate text-xs text-white/90">{user.email}</p>
+        </div>
+      </div>
+
+      <div className="relative z-10 flex min-h-screen flex-col lg:h-screen lg:min-h-0 lg:flex-row">
+        <aside className="hidden border-b border-white/35 bg-slate-950/82 px-3 py-3.5 text-white shadow-[0_14px_30px_rgba(15,23,42,0.16)] backdrop-blur-2xl sm:px-4 sm:py-4 lg:flex lg:h-full lg:w-[248px] lg:shrink-0 lg:flex-col lg:border-b-0 lg:border-r lg:border-white/10 lg:px-4 lg:py-5">
           <div className="flex items-center justify-between gap-3 lg:items-start">
             <div className="flex items-center gap-3">
       
@@ -270,7 +309,7 @@ export default function App() {
             ))}
           </nav>
 
-          <div className="mt-4 rounded-[1.4rem] border border-white/10 bg-gradient-to-br from-cyan-300/12 to-indigo-300/10 p-4 text-white/90 lg:mt-auto">
+          <div className="mt-4 rounded-[1.4rem] border border-white/10 bg-gradient-to-br from-cyan-300/12 to-indigo-300/10 p-4 text-white/90">
             <div className="flex items-center gap-2 text-cyan-100/80">
               <Sparkles className="h-3.5 w-3.5" />
               <p className="text-xs uppercase tracking-[0.26em]">Operational Focus</p>
@@ -290,7 +329,7 @@ export default function App() {
           </div>
         </aside>
 
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-3 sm:p-4 lg:h-screen lg:p-5 xl:p-6">
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-3 pb-24 sm:p-4 sm:pb-24 lg:h-full lg:min-h-0 lg:p-5 lg:pb-5 xl:p-6">
           <header className="rounded-[1.5rem] border border-white/45 bg-white/52 px-4 pb-4 pt-1 shadow-[0_18px_40px_rgba(15,23,42,0.07)] backdrop-blur-xl sm:px-5 sm:py-4 lg:px-6">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
               <div>
@@ -312,6 +351,31 @@ export default function App() {
           </div>
         </main>
       </div>
+
+      <nav className="fixed inset-x-3 bottom-3 z-40 rounded-[1.5rem] border border-slate-900/12 bg-slate-950/88 p-2 text-white shadow-[0_18px_40px_rgba(15,23,42,0.24)] backdrop-blur-2xl lg:hidden">
+        <div className="grid grid-cols-4 gap-2">
+          {availableNavItems.map((item) => (
+            <button
+              key={item.id}
+              className={cn(
+                "relative flex min-h-[4.25rem] flex-col items-center justify-center gap-1 rounded-[1rem] px-2 py-2 text-[11px] font-medium transition-all",
+                activeTab === item.id
+                  ? "bg-white text-slate-950 shadow-[0_14px_30px_rgba(255,255,255,0.1)]"
+                  : "bg-white/6 text-white/74 hover:bg-white/10 hover:text-white"
+              )}
+              onClick={() => handleTabChange(item.id)}
+            >
+              <item.icon className="h-[18px] w-[18px]" />
+              <span className="truncate">{item.label}</span>
+              {item.id === "notifications" && unreadCount > 0 && (
+                <Badge className="absolute right-2 top-2 border-none bg-rose-500 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
+                  {unreadCount}
+                </Badge>
+              )}
+            </button>
+          ))}
+        </div>
+      </nav>
     </div>
   );
 }
@@ -319,8 +383,8 @@ export default function App() {
 function HeaderChip({ label, value }) {
   return (
     <div className="rounded-[1.1rem] border border-white/50 bg-white/55 px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)] backdrop-blur">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">{label}</p>
-      <p className="mt-1 text-xs font-semibold capitalize text-slate-900 sm:text-sm">{value}</p>
+      {label ? <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">{label}</p> : null}
+      <p className={cn("text-xs font-semibold capitalize text-slate-900 sm:text-sm", label ? "mt-1" : "mt-0")}>{value}</p>
     </div>
   );
 }

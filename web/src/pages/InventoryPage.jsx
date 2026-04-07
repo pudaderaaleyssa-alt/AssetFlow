@@ -1,4 +1,4 @@
-import { Archive, CircleDollarSign, Layers3, PackageSearch } from "lucide-react";
+import { AlertCircle, Archive, CircleDollarSign, Layers3, PackageSearch } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -10,10 +10,24 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-export default function InventoryPage({ assets = [] }) {
+export default function InventoryPage({ assets = [], assetError = "", role }) {
   const totalValue = assets.reduce((sum, asset) => sum + asset.price, 0);
   const activeCount = assets.filter((asset) => asset.status.toLowerCase() === "active").length;
   const categoryCount = new Set(assets.map((asset) => asset.category)).size;
+
+  if (assetError) {
+    return (
+      <Card className="rounded-[1.5rem] border-rose-200 bg-rose-50/90 py-0 shadow-[0_18px_40px_rgba(15,23,42,0.07)] backdrop-blur-xl">
+        <CardContent className="flex min-h-[18rem] flex-col items-center justify-center p-8 text-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-[1.1rem] bg-rose-100 text-rose-500">
+            <AlertCircle className="h-6 w-6" />
+          </div>
+          <h2 className="mt-5 text-xl font-semibold tracking-tight text-rose-950">Asset inventory could not load</h2>
+          <p className="mt-2 max-w-md text-sm leading-6 text-rose-700">{assetError}</p>
+        </CardContent>
+      </Card>
+    );
+  }
 
   if (assets.length === 0) {
     return (
@@ -24,7 +38,9 @@ export default function InventoryPage({ assets = [] }) {
           </div>
           <h2 className="mt-5 text-xl font-semibold tracking-tight text-slate-950">No assets imported yet</h2>
           <p className="mt-2 max-w-md text-sm leading-6 text-slate-500">
-            Upload a CSV or spreadsheet to start visualizing your inventory, categories, and statuses here.
+            {role === "admin"
+              ? "No asset records are available yet. Admin accounts can see the full assets collection."
+              : "Upload a CSV or spreadsheet to start visualizing your inventory. This view only shows assets tagged to your account."}
           </p>
         </CardContent>
       </Card>

@@ -1,0 +1,45 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return signedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+    }
+
+    match /users/{userId} {
+      allow read: if isSelf(userId);
+
+      // Allow the client to create its own profile shell without choosing a role.
+      allow create: if isSelf(userId) && !("role" in request.resource.data);
+
+      // Allow push-token updates, but prevent role escalation from the client.
+      allow update: if isSelf(userId) &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(["fcmToken"]);
+
+      allow delete: if false;
+    }
+
+    match /assets/{assetId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow write: if isAdmin();
+    }
+
+    match /announcements/{announcementId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

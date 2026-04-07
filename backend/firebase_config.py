@@ -1,8 +1,12 @@
+from pathlib import Path
+
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# Replace 'your-key-filename.json' with the actual name of the file you downloaded
-cred = credentials.Certificate("serviceAccountKey.json")
-firebase_admin.initialize_app(cred)
+service_account_path = Path(__file__).with_name("serviceAccountKey.json")
+
+if not firebase_admin._apps:
+    cred = credentials.Certificate(service_account_path)
+    firebase_admin.initialize_app(cred)
 
 db = firestore.client()
